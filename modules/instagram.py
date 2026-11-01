@@ -8,19 +8,17 @@ First run: You'll need to log in manually. Session persists.
 import os
 import time
 from pathlib import Path
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import undetected_chromedriver as uc
-from core.browser import CHROME_START_LOCK
+from core.browser import CHROME_START_LOCK, browser_error_summary
 
 
 DEFAULT_CHROME_USER_DATA_DIR = (
-    Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    / "Google"
-    / "Chrome"
-    / "User Data"
+    Path(__file__).parent.parent / "data" / "instagram_profile"
 )
 CHROME_USER_DATA_DIR = Path(
     os.getenv("INSTAGRAM_CHROME_USER_DATA_DIR", str(DEFAULT_CHROME_USER_DATA_DIR))
@@ -36,13 +34,7 @@ class InstagramModule:
     def start(self):
         """Launch Instagram in Chrome."""
         try:
-            profile_dir = CHROME_USER_DATA_DIR / CHROME_PROFILE
-            if not profile_dir.is_dir():
-                raise FileNotFoundError(
-                    f"Chrome profile not found: {profile_dir}. "
-                    "Set INSTAGRAM_CHROME_USER_DATA_DIR and INSTAGRAM_CHROME_PROFILE."
-                )
-
+            CHROME_USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
             options = uc.ChromeOptions()
             options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
             options.add_argument(f"--profile-directory={CHROME_PROFILE}")
@@ -60,8 +52,16 @@ class InstagramModule:
             )
             self._logged_in = True
             print("✅ Instagram: Logged in!")
+        except TimeoutException:
+            self._logged_in = False
+            print(
+                "⚠ Instagram did not reach its logged-in inbox within 60 seconds. "
+                "Complete login if prompted; if already logged in, the page "
+                "selector may need updating."
+            )
         except Exception as e:
-            print(f"⚠ Instagram start error: {e}")
+            self._logged_in = False
+            print(f"⚠ Instagram startup failed: {browser_error_summary(e)}")
 
     def get_unread_dms(self) -> list[dict]:
         """Get unread DMs."""
@@ -131,6 +131,8 @@ class InstagramModule:
         return False
 
     def get_summary(self) -> str:
+        if not self._logged_in:
+            return "Instagram is not connected. Check Chrome startup and log in."
         dms = self.get_unread_dms()
         if not dms:
             return "📸 No unread Instagram DMs."

@@ -31,7 +31,6 @@ import time
 import threading
 import webbrowser
 import datetime
-import re
 import json
 import signal
 
@@ -44,7 +43,7 @@ from rich.table import Table
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from core.brain import JarvisBrain
-from core.voice import VoiceEngine
+from core.voice import VoiceEngine, sanitize_speech_text
 from core.tasks import TaskManager
 from core.notifier import notify
 
@@ -103,7 +102,9 @@ class Jarvis:
         # Browser-based modules start their own driver
         wa = load_module("whatsapp", "modules.whatsapp.WhatsAppModule")
         if wa:
-            threading.Thread(target=wa.start, daemon=True).start()
+            threading.Thread(
+                target=self._start_whatsapp, args=(wa,), daemon=True
+            ).start()
 
         ig = load_module("instagram", "modules.instagram.InstagramModule")
         if ig:
@@ -111,14 +112,33 @@ class Jarvis:
 
         load_module("jobs", "modules.jobs.JobModule")
 
+    def _start_whatsapp(self, whatsapp):
+        """Check unread WhatsApp chats as soon as the Web session logs in."""
+        whatsapp.start()
+        if whatsapp._logged_in:
+            self._check_whatsapp()
+
     # ── Background check functions ───────────────────────────────────────
 
     def _say(self, text: str):
         """Speak a natural update in the most recently detected language."""
+        text = sanitize_speech_text(text, self.voice.last_language_code)
         spoken_text = self.brain.phrase_for_speech(
             text, self.voice.last_language, self.voice.last_transcript
         )
+        spoken_text = sanitize_speech_text(
+            spoken_text, self.voice.last_language_code
+        )
         self.voice.speak(spoken_text)
+
+    def _acknowledge_wake(self, waiting_for_command=False):
+        """Acknowledge the wake word in English without changing reply language."""
+        text = (
+            "Yes sir, I'm listening. Tell me what you need."
+            if waiting_for_command
+            else "Yes sir, I hear you."
+        )
+        self.voice.speak(text, language_code="en")
 
     def _check_emails(self, announce=True):
         """Background: check Gmail for new mail."""
@@ -126,13 +146,15 @@ class Jarvis:
         if mod:
             emails = mod.get_unread(5) if hasattr(mod, "get_unread") else []
             if emails:
-                lines = [f"{len(emails)} unread emails:"]
+                lines = [
+                    f"{len(emails)} unread emails from the last 30 minutes:"
+                ]
                 lines.extend(
                     f"From {email['from']}: {email['subject']}" for email in emails
                 )
                 summary = "\n".join(lines)
             else:
-                summary = "No unread emails."
+                summary = "No unread emails from the last 30 minutes."
             self.brain.update_context("gmail", {"summary": summary})
             email_ids = {email["id"] for email in emails if email.get("id")}
             new_email_ids = email_ids - self._last_email_ids
@@ -143,7 +165,7 @@ class Jarvis:
 
     def _check_whatsapp(self, announce=True):
         wa = modules.get("whatsapp")
-        if wa and wa._logged_in:
+        if wa and wa.refresh_login_status():
             chats = wa.get_unread_chats()
             self.brain.update_context("whatsapp", {
                 "unread": len(chats),
@@ -328,19 +350,20 @@ class Jarvis:
 
     def handle_command(self, text: str):
         """Route a voice command to the right handler."""
+        normalized_text = text.casefold()
         # Exit
-        if text in (
+        if normalized_text in (
             "quit", "exit", "goodbye", "bye", "shut down jarvis",
             "stop jarvis",
         ):
             self._say("Goodbye. Shutting down now.")
             self.shutdown()
             return
-        if text in ("stop", "stop speaking", "quiet"):
+        if normalized_text in ("stop", "stop speaking", "quiet"):
             return
 
         # Status report
-        if any(w in text for w in ("status", "report", "what's going on", "update me", "briefing")):
+        if any(w in normalized_text for w in ("status", "report", "what's going on", "update me", "briefing")):
             self._give_status_report()
             return
 
@@ -626,9 +649,12 @@ class Jarvis:
                 command = self.voice.consume_interrupted_command()
                 if command is None:
                     command = self.voice.wait_for_wake_word()
+                acknowledged = command == ""
                 if command == "":
-                    self._say("I'm listening. What would you like me to do?")
+                    self._acknowledge_wake(waiting_for_command=True)
                     command = self.voice.listen(timeout=8, phrase_limit=20)
+                if command and not acknowledged:
+                    self._acknowledge_wake()
                 if command:
                     self.handle_command(command)
             except KeyboardInterrupt:

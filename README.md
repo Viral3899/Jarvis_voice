@@ -61,7 +61,7 @@ ELEVENLABS_API_KEY=your_rotated_elevenlabs_key
 ELEVENLABS_VOICE_ID=JBFqnCBsd6RMkjVDRZzb
 TTS_PROVIDER=elevenlabs
 # Set TTS_PROVIDER=local to always use the local voice instead.
-DEFAULT_LANGUAGE=gu
+DEFAULT_LANGUAGE=hi
 
 # Optional — configure what you need
 TELEGRAM_BOT_TOKEN=123456:ABC-DEF
@@ -69,14 +69,14 @@ TELEGRAM_CHAT_ID=123456789
 JOB_UPDATES_EMAIL=you@example.com
 JOB_UPDATES_WHATSAPP=your_saved_contact_or_phone_number
 
-# Instagram uses the existing Chrome profile by default.
+# Instagram uses a separate Jarvis Chrome profile by default.
 INSTAGRAM_CHROME_PROFILE=Default
-# Set this only if Chrome's user data folder is not in its standard Windows location.
-# INSTAGRAM_CHROME_USER_DATA_DIR=C:\Users\you\AppData\Local\Google\Chrome\User Data
+# Optional: override the default data/instagram_profile user-data directory.
+# INSTAGRAM_CHROME_USER_DATA_DIR=C:\Users\you\AppData\Local\Jarvis\Instagram
 ```
-Instagram reuses your existing Chrome login; WhatsApp opens a normal, visible Chrome window with a separate Jarvis profile under `data/whatsapp_profile/` (not incognito or headless). Scan the QR code in that window on first login; the profile retains the session for later runs. Close all Chrome windows before starting Jarvis so it can open the selected Instagram profile. To identify the profile name, open `chrome://version` in Chrome and check the final folder name in **Profile Path** (for example, `Default` or `Profile 12`).
+Instagram and WhatsApp each open a normal, visible Chrome window using separate Jarvis profiles under `data/instagram_profile/` and `data/whatsapp_profile/` (not incognito or headless). Log in to Instagram and scan the WhatsApp QR code in their respective windows on first use; each profile retains its session for later runs. If WhatsApp's initial login wait times out, leave its window open; Jarvis keeps checking and detects a later QR login. Instagram no longer needs to open your everyday Chrome profile, so close-conflict errors are less likely.
 
-Jarvis defaults to Gujarati (`DEFAULT_LANGUAGE=gu`). Groq's multilingual Whisper detects whether you are speaking Gujarati, Hindi, or English, and Jarvis responds in that detected language (naturally mirroring mixed-language speech). ElevenLabs is the default speech provider and uses the multilingual Eleven v3 model with the selected language code (`gu`, `hi`, or `en`). If ElevenLabs is unavailable or not configured, Jarvis falls back to local speech. Set `TTS_PROVIDER=local` to always use local speech. Voice audio is sent to Groq for transcription, and generated speech text is sent to ElevenLabs for audio.
+Jarvis defaults to Hindi (`DEFAULT_LANGUAGE=hi`). Groq's multilingual Whisper detects whether you are speaking Hindi or English, and Jarvis responds in that detected language (naturally mirroring mixed Hindi-English speech). Non-Hindi/English language detections use the configured default language. ElevenLabs is the default speech provider and uses the multilingual Eleven v3 model with the selected language code (`hi` or `en`). If ElevenLabs is unavailable or not configured, Jarvis falls back to local speech. Set `TTS_PROVIDER=local` to always use local speech. Voice audio is sent to Groq for transcription, and generated speech text is sent to ElevenLabs for audio.
 
 ### 3. Gmail & Calendar Setup
 1. Go to [Google Cloud Console](https://console.cloud.google.com)
@@ -113,7 +113,9 @@ python jarvis.py
 | **"Jarvis, [any question]"** | AI chat via Groq |
 | **"Jarvis, quit"** | Shuts down |
 
-You can interrupt Jarvis while it is speaking by saying **"Jarvis"** followed by a new command. It stops the current reply and handles the new request; say **"Jarvis, stop"** to silence the current reply and continue listening.
+You can interrupt Jarvis while it is speaking by saying **"Jarvis"** followed by a new command. It stops the current reply, acknowledges you in English (for example, "Yes sir, I hear you"), and handles the new request. Saying only **"Jarvis"** stops the speech and prompts in English: "Yes sir, I'm listening. Tell me what you need." Replies to your command still follow the detected spoken language.
+
+Email checks include unread messages received within the last 30 minutes. WhatsApp checks run immediately after WhatsApp Web logs in and repeat at the configured interval. Spoken updates replace URLs with a short link mention and omit meeting dial-in numbers, IDs, and access codes.
 
 Job links are sent only when you explicitly ask. Configure `JOB_UPDATES_EMAIL` and `JOB_UPDATES_WHATSAPP` in `.env`; WhatsApp must be logged in and the number should be searchable in your WhatsApp contacts/chats.
 

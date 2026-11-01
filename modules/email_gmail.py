@@ -13,6 +13,7 @@ Setup:
 import os
 import base64
 import json
+import time
 from pathlib import Path
 from email.mime.text import MIMEText
 
@@ -61,13 +62,16 @@ class GmailModule:
         self.service = build("gmail", "v1", credentials=creds)
 
     def get_unread(self, max_results: int = 10) -> list[dict]:
-        """Get unread emails from inbox."""
+        """Get unread emails received within the last 30 minutes."""
         if not self.service:
             return []
 
         try:
+            received_after = int(time.time()) - 30 * 60
             results = self.service.users().messages().list(
-                userId="me", q="is:unread", maxResults=max_results
+                userId="me",
+                q=f"is:unread after:{received_after}",
+                maxResults=max_results,
             ).execute()
 
             messages = results.get("messages", [])
@@ -138,8 +142,8 @@ class GmailModule:
     def get_summary(self) -> str:
         emails = self.get_unread(5)
         if not emails:
-            return "📧 No unread emails."
-        lines = [f"📧 {len(emails)} unread emails:"]
+            return "📧 No unread emails from the last 30 minutes."
+        lines = [f"📧 {len(emails)} unread emails from the last 30 minutes:"]
         for e in emails:
             lines.append(f"  • From: {e['from'][:30]} — {e['subject'][:50]}")
         return "\n".join(lines)
