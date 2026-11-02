@@ -37,6 +37,9 @@ ASR_ARTIFACT_PHRASES = (
     "thanks for watching",
     "thank you for watching",
     "subscribe to my channel",
+    "subtitles by",
+    "amara.org",
+    "captions by",
 )
 ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 DEFAULT_TTS_PROVIDER = "elevenlabs"
@@ -225,11 +228,25 @@ def _print_safe(text: str):
 
 
 def _wake_word_pattern() -> re.Pattern[str]:
-    wake_words = {WAKE_WORD, "जार्विस", "જાર્વિસ"}
+    wake_words = {
+        WAKE_WORD,
+        "जार्विस", "जारविस", "चार्विस", "चारविस",
+        "જાર્વિસ", "જારવિસ", "ચાર્વિસ", "ચારવિસ",
+    }
     alternatives = "|".join(
         re.escape(word) for word in sorted(wake_words, key=len, reverse=True)
     )
     return re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)", re.IGNORECASE)
+
+
+def _is_asr_artifact(text: str) -> bool:
+    """Reject common caption/transcription noise before routing it as a command."""
+    normalized_text = " ".join(text.casefold().split())
+    if any(phrase in normalized_text for phrase in ASR_ARTIFACT_PHRASES):
+        return True
+
+    words = re.findall(r"\w+", normalized_text, flags=re.UNICODE)
+    return len(words) >= 7 and len(set(words)) <= 3
 
 
 def _normalize_near_wake_word(text: str) -> str:
@@ -289,6 +306,7 @@ class VoiceEngine:
         self.recognizer.operation_timeout = FALLBACK_SPEECH_TIMEOUT
         self._groq_retry_after = 0.0
         self._last_transcription_warning = {}
+        self._last_microphone_warning = 0.0
 
         self._speaking = False
         self._lock = threading.Lock()
@@ -460,10 +478,11 @@ class VoiceEngine:
             return self._transcribe_with_google(audio)
 
         text = str(transcription.get("text", "")).strip()
-        normalized_text = " ".join(text.casefold().split())
-        if not text or not any(character.isalnum() for character in text):
-            return None
-        if any(phrase in normalized_text for phrase in ASR_ARTIFACT_PHRASES):
+        if (
+            not text
+            or not any(character.isalnum() for character in text)
+            or _is_asr_artifact(text)
+        ):
             return None
 
         detected_language = str(
@@ -510,7 +529,11 @@ class VoiceEngine:
                 )
                 return None
 
-        if not text or not any(character.isalnum() for character in text):
+        if (
+            not text
+            or not any(character.isalnum() for character in text)
+            or _is_asr_artifact(text)
+        ):
             return None
 
         if recognized_locale:
@@ -528,6 +551,32 @@ class VoiceEngine:
         if last_warning is None or now - last_warning >= GROQ_RETRY_COOLDOWN:
             _print_safe(f"Warning: {message}")
             self._last_transcription_warning[backend] = now
+
+    def _warn_microphone_unavailable(self, error: Exception) -> None:
+        """Report device errors with local microphone options, without log spam."""
+        now = time.monotonic()
+        if now - self._last_microphone_warning < 10:
+            return
+        self._last_microphone_warning = now
+        _print_safe(
+            f"Warning: Microphone is unavailable ({type(error).__name__}: {error}). "
+            "Check Windows Settings > Privacy & security > Microphone, make sure "
+            "the correct input device is enabled, and close apps using it."
+        )
+        try:
+            devices = sr.Microphone.list_microphone_names()
+        except (OSError, AttributeError, AssertionError, RuntimeError) as device_error:
+            _print_safe(f"Could not list microphone devices: {device_error}")
+            return
+        if devices:
+            _print_safe(
+                "Detected microphone devices: "
+                + "; ".join(f"{index}: {name}" for index, name in enumerate(devices))
+            )
+        else:
+            _print_safe(
+                "No microphone devices were detected. Connect or enable a microphone."
+            )
 
     def _speak_with_elevenlabs(
         self, text: str, language_code: str | None = None
@@ -623,10 +672,10 @@ class VoiceEngine:
         report_transcript: bool = True,
     ) -> str | None:
         """Transcribe speech with automatic multilingual language detection."""
-        with self._microphone_lock:
-            with sr.Microphone() as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
-                try:
+        try:
+            with self._microphone_lock:
+                with sr.Microphone() as source:
+                    self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
                     audio = self.recognizer.listen(
                         source, timeout=timeout, phrase_time_limit=phrase_limit
                     )
@@ -639,14 +688,17 @@ class VoiceEngine:
                     elif report_transcript:
                         _print_safe(f"You: {text}")
                     return text
-                except (sr.WaitTimeoutError, sr.UnknownValueError):
-                    return None
-                except requests.RequestException as e:
-                    _print_safe(f"Warning: Groq speech recognition error: {e}")
-                    return None
-                except (ValueError, KeyError) as e:
-                    _print_safe(f"Warning: Invalid speech recognition response: {e}")
-                    return None
+        except (sr.WaitTimeoutError, sr.UnknownValueError):
+            return None
+        except requests.RequestException as e:
+            _print_safe(f"Warning: Groq speech recognition error: {e}")
+            return None
+        except (ValueError, KeyError) as e:
+            _print_safe(f"Warning: Invalid speech recognition response: {e}")
+            return None
+        except (OSError, AttributeError, AssertionError, RuntimeError) as e:
+            self._warn_microphone_unavailable(e)
+            return None
 
     def record_audio(self, timeout: int = 8, phrase_limit: int = 30) -> bytes | None:
         """Record a short microphone clip and return it as WAV bytes."""
@@ -670,27 +722,62 @@ class VoiceEngine:
         Continuously listen. When wake word is detected, return the
         rest of the phrase (or listen again for the command).
         """
-        while True:
-            interrupted_command = self.consume_interrupted_command()
-            if interrupted_command is not None:
-                return interrupted_command
+        _print_safe(
+            f"🎙 Listening for wake word '{WAKE_WORD}'. "
+            f"Say '{WAKE_WORD}' followed by your command."
+        )
+        last_listening_hint = time.monotonic()
+        try:
+            with self._microphone_lock:
+                with sr.Microphone() as source:
+                    self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                    while True:
+                        interrupted_command = self.consume_interrupted_command()
+                        if interrupted_command is not None:
+                            return interrupted_command
 
-            text = self.listen(
-                timeout=1.5, phrase_limit=10, report_transcript=False
-            )
-            if text is None:
-                continue
+                        try:
+                            audio = self.recognizer.listen(
+                                source, timeout=1.5, phrase_time_limit=10
+                            )
+                        except sr.WaitTimeoutError:
+                            now = time.monotonic()
+                            if now - last_listening_hint >= 30:
+                                _print_safe(
+                                    "Still listening; no speech detected. Check that "
+                                    "your microphone is selected, unmuted, and close "
+                                    "enough to hear you."
+                                )
+                                last_listening_hint = now
+                            continue
 
-            normalized_text = _normalize_near_wake_word(text)
-            wake_word = _wake_word_pattern()
-            match = wake_word.search(normalized_text)
-            if not match:
-                continue
-            _print_safe(f"You: {text}")
+                        text = self._transcribe(audio)
+                        if text is None:
+                            _print_safe(
+                                "Audio was captured, but speech was not understood. "
+                                "Speak clearly and include the wake word."
+                            )
+                            continue
 
-            command = wake_word.sub("", normalized_text, count=1).strip(" ,.!?;:")
-            command = correct_nearby_command_words(command)
-            if command:
-                return command
-            # Let the orchestrator respond in the detected language before listening.
-            return ""
+                        _print_safe(f"You: {text}")
+                        normalized_text = _normalize_near_wake_word(text)
+                        wake_word = _wake_word_pattern()
+                        if not wake_word.search(normalized_text):
+                            _print_safe(
+                                f"Wake word '{WAKE_WORD}' was not detected. "
+                                "Start the command with the wake word."
+                            )
+                            continue
+
+                        command = wake_word.sub(
+                            "", normalized_text, count=1
+                        ).strip(" ,.!?;:")
+                        command = correct_nearby_command_words(command)
+                        if command:
+                            return command
+                        # Let the orchestrator respond before listening for the command.
+                        return ""
+        except (OSError, AttributeError, AssertionError, RuntimeError) as e:
+            self._warn_microphone_unavailable(e)
+            time.sleep(2)
+            return None

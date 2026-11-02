@@ -101,6 +101,8 @@ class Jarvis:
         self.tasks = TaskManager()
         self.scheduler = BackgroundScheduler()
         self.running = False
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_started = False
         self._start_time = time.time()
         
         # State tracking for deduplication
@@ -852,6 +854,11 @@ class Jarvis:
 
     def shutdown(self):
         """Clean shutdown."""
+        with self._shutdown_lock:
+            if self._shutdown_started:
+                return
+            self._shutdown_started = True
+
         console.print("[yellow]🛑 Shutting down...[/yellow]")
         self.running = False
         
@@ -877,9 +884,8 @@ class Jarvis:
                     mod.stop()
                 except Exception:
                     pass
-        
         console.print("[bold cyan]👋 Jarvis offline.[/bold cyan]")
-        sys.exit(0)
+        console.print("[bold cyan]👋 Jarvis offline.[/bold cyan]")
 
 
 def setup_autostart():
