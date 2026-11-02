@@ -12,11 +12,16 @@ from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import undetected_chromedriver as uc
 from core.browser import CHROME_START_LOCK, browser_error_summary
 
 
+INSTAGRAM_LOGGED_IN_SELECTORS = (
+    '[aria-label="Direct"]',
+    'a[href="/direct/inbox/"]',
+    '[aria-label="Messages"]',
+    'svg[aria-label="Messenger"]',
+)
 DEFAULT_CHROME_USER_DATA_DIR = (
     Path(__file__).parent.parent / "data" / "instagram_profile"
 )
@@ -34,7 +39,6 @@ class InstagramModule:
     def start(self):
         """Launch Instagram in Chrome."""
         try:
-            CHROME_USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
             options = uc.ChromeOptions()
             options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
             options.add_argument(f"--profile-directory={CHROME_PROFILE}")
@@ -46,9 +50,12 @@ class InstagramModule:
             print("📸 Instagram: Waiting for login...")
             print("   Log in manually if this is the first time.")
 
-            # Wait for DM inbox to load
+            # Instagram has changed its navigation labels across UI versions.
             WebDriverWait(self.driver, 60).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, '[aria-label="Direct"]'))
+                lambda driver: any(
+                    driver.find_elements(By.CSS_SELECTOR, selector)
+                    for selector in INSTAGRAM_LOGGED_IN_SELECTORS
+                )
             )
             self._logged_in = True
             print("✅ Instagram: Logged in!")

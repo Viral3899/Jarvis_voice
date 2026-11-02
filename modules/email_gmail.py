@@ -13,8 +13,12 @@ Setup:
 import os
 import base64
 import json
+import mimetypes
 import time
 from pathlib import Path
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from google.oauth2.credentials import Credentials
@@ -121,13 +125,36 @@ class GmailModule:
             print(f"⚠ Gmail reply error: {e}")
             return False
 
-    def send_email(self, recipient: str, subject: str, body: str) -> bool:
-        """Send a plain-text email."""
+    def send_email(
+        self,
+        recipient: str,
+        subject: str,
+        body: str,
+        attachment_path: str | Path | None = None,
+    ) -> bool:
+        """Send an email, optionally including one file attachment."""
         if not self.service:
             return False
 
         try:
-            msg = MIMEText(body, _charset="utf-8")
+            if attachment_path:
+                path = Path(attachment_path)
+                content_type, _ = mimetypes.guess_type(path.name)
+                maintype, subtype = (content_type or "application/octet-stream").split(
+                    "/", 1
+                )
+                msg = MIMEMultipart()
+                msg.attach(MIMEText(body, _charset="utf-8"))
+                with path.open("rb") as attachment_file:
+                    attachment = MIMEBase(maintype, subtype)
+                    attachment.set_payload(attachment_file.read())
+                encoders.encode_base64(attachment)
+                attachment.add_header(
+                    "Content-Disposition", "attachment", filename=path.name
+                )
+                msg.attach(attachment)
+            else:
+                msg = MIMEText(body, _charset="utf-8")
             msg["to"] = recipient
             msg["subject"] = subject
             raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()

@@ -11,8 +11,12 @@ Setup:
 
 import os
 import asyncio
+import threading
 from telegram import Bot
 from telegram.error import TelegramError
+
+
+_TELEGRAM_UPDATES_LOCK = threading.Lock()
 
 
 class TelegramModule:
@@ -47,11 +51,19 @@ class TelegramModule:
                         })
                 return messages
         except TelegramError as e:
-            print(f"⚠ Telegram error: {e}")
+            error = str(e)
+            if "conflict" in error.lower() and "getupdates" in error.lower():
+                print(
+                    "⚠ Telegram polling conflict: another Jarvis process or "
+                    "client is polling this bot token. Stop the other poller."
+                )
+            else:
+                print(f"⚠ Telegram error: {e}")
             return []
 
     def get_new_messages(self) -> list[dict]:
-        return asyncio.run(self._get_updates())
+        with _TELEGRAM_UPDATES_LOCK:
+            return asyncio.run(self._get_updates())
 
     async def _send(self, chat_id: str, text: str):
         token = self.token

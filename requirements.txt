@@ -34,3 +34,14 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 cryptography>=41.0.0
 rich>=13.7.0
+
+# Web API & Dashboard
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Windows auto-start
+pywin32>=306
+winshell>=0.6
+
+# Plugin system
+importlib-metadata>=6.0.0

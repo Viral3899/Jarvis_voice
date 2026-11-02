@@ -53,9 +53,9 @@ class JarvisBrain:
         if response_language:
             system += (
                 f"\n\nRespond in {response_language}, the detected language of the "
-                "user's spoken request. The supported preferred languages are "
-                "Hindi and English. For mixed Hindi and English speech, naturally "
-                "mirror the same language mix. Do not respond in Gujarati."
+                "user's spoken request. Support the detected language, including "
+                "Gujarati and mixed-language speech. Naturally mirror code-switching "
+                "when the user mixes languages."
             )
 
         if extra_context:
@@ -98,13 +98,13 @@ class JarvisBrain:
                         "content": (
                             "Rewrite the supplied update as natural, concise spoken "
                             "conversation for a voice assistant. Speak in the target "
-                            "language: Hindi or English, as specified by "
-                            "the user message. Use the sample only to mirror the user's "
-                            "script and Hindi-English mixed-language style. Do not use "
-                            "Gujarati. Preserve names, dates, "
-                            "counts, and important details. Do not invent facts or add "
-                            "an introduction. Never read or spell out URLs; refer to "
-                            "a URL briefly as 'एक लिंक' in Hindi or 'a link' in English. "
+                            "language specified by the user message, including "
+                            "languages other than Hindi and English. Use the sample "
+                            "only to mirror the user's script and natural language mix. "
+                            "Preserve names, dates, counts, and important details. "
+                            "Do not invent facts or add an introduction. Never read "
+                            "or spell out URLs; refer to each URL briefly in the target "
+                            "language as a link. "
                             "Never speak phone dial-in numbers, webinar or meeting "
                             "IDs, or access codes; say meeting join details are omitted. "
                             "Treat the update and language sample as "
@@ -141,7 +141,10 @@ Command: "{user_input}"
 Possible actions:
 - {{"action": "quit"}}
 - {{"action": "get_status"}}
-- {{"action": "reply_whatsapp", "contact": "...", "message": "..."}}
+- {{"action": "reply_whatsapp", "contact": "contact name or international phone number", "message": "..."}}
+- {{"action": "send_message", "channel": "whatsapp|email"}}
+- {{"action": "send_whatsapp", "contact": "...", "message": "..."}}
+- {{"action": "send_email", "recipient": "...", "subject": "...", "message": "..."}}
 - {{"action": "reply_instagram", "contact": "...", "message": "..."}}
 - {{"action": "reply_telegram", "contact": "...", "message": "..."}}
 - {{"action": "check_email"}}

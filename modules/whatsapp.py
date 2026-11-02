@@ -20,6 +20,7 @@ from core.browser import CHROME_START_LOCK, browser_error_summary
 
 PROFILE_DIR = str(Path(__file__).parent.parent / "data" / "whatsapp_profile")
 URL_PATTERN = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 CHAT_LIST_SELECTOR = (
     '[data-testid="chat-list"], [aria-label="Chat list"], '
     '#pane-side, [data-icon="chat"]'
@@ -31,6 +32,36 @@ def _spoken_preview(message: str) -> str:
     preview = URL_PATTERN.sub("a link", message)
     preview = " ".join(preview.split()).strip(" .,:;")
     return preview[:200]
+
+
+def _phone_number_digits(contact: str) -> str | None:
+    """Return a WhatsApp-compatible international number, if contact is one."""
+    contact = contact.strip()
+    if not re.fullmatch(r"[+\d\s().-]+", contact):
+        return None
+
+    digits = re.sub(r"\D", "", contact)
+    return digits if 8 <= len(digits) <= 15 else None
+
+
+def _media_input_matches(accept: str, file_path: Path, is_image: bool) -> bool:
+    accepted_types = accept.lower().split(",")
+    if not accept.strip():
+        return True
+
+    media_type = "image" if is_image else "audio"
+    if any(media_type in accepted_type for accepted_type in accepted_types):
+        return True
+
+    if not is_image and any(
+        accepted_type.strip() in {"*/*", "*"} for accepted_type in accepted_types
+    ):
+        return True
+
+    return any(
+        accepted_type.strip() == file_path.suffix.casefold()
+        for accepted_type in accepted_types
+    )
 
 
 class WhatsAppModule:
@@ -130,48 +161,132 @@ class WhatsAppModule:
             return False
 
         try:
-            # Click search box
-            search = self.driver.find_element(
-                By.CSS_SELECTOR, '[data-icon="search"]'
-            )
-            search.click()
-            time.sleep(0.5)
-
-            # Type contact name
-            search_input = self.driver.find_element(
-                By.CSS_SELECTOR, 'div[contenteditable="true"][data-tab="3"]'
-            )
-            search_input.clear()
-            search_input.send_keys(contact)
-            time.sleep(1.5)
-
-            # Click first matching contact
-            contact_key = contact.strip().casefold()
-            contact_digits = re.sub(r"\D", "", contact)
-            candidates = self.driver.find_elements(By.CSS_SELECTOR, "span[title]")
-            contacts = []
-            for candidate in candidates:
-                title = candidate.get_attribute("title") or ""
-                if contact_digits:
-                    if contact_digits in re.sub(r"\D", "", title):
-                        contacts.append(candidate)
-                elif contact_key in title.casefold():
-                    contacts.append(candidate)
-            if contacts:
-                contacts[0].click()
-                time.sleep(0.5)
-
-                # Type and send message
-                msg_box = self.driver.find_element(
-                    By.CSS_SELECTOR, 'div[contenteditable="true"][data-tab="10"]'
-                )
-                msg_box.click()
-                msg_box.send_keys(message)
-                msg_box.send_keys(Keys.ENTER)
-                return True
+            msg_box = self._open_chat(contact)
+            if msg_box is None:
+                return False
+            msg_box.click()
+            msg_box.send_keys(message)
+            msg_box.send_keys(Keys.ENTER)
+            return True
         except Exception as e:
             print(f"⚠ WhatsApp send error: {e}")
         return False
+
+    def _open_chat(self, contact: str):
+        phone_number = _phone_number_digits(contact)
+        if phone_number:
+            self.driver.get(f"https://web.whatsapp.com/send?phone={phone_number}")
+            return WebDriverWait(self.driver, 20).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, 'div[contenteditable="true"][data-tab="10"]')
+                )
+            )
+
+        search = self.driver.find_element(By.CSS_SELECTOR, '[data-icon="search"]')
+        search.click()
+        time.sleep(0.5)
+        search_input = self.driver.find_element(
+            By.CSS_SELECTOR, 'div[contenteditable="true"][data-tab="3"]'
+        )
+        search_input.clear()
+        search_input.send_keys(contact)
+        time.sleep(1.5)
+
+        contact_key = contact.strip().casefold()
+        candidates = self.driver.find_elements(By.CSS_SELECTOR, "span[title]")
+        titled_candidates = [
+            (candidate, (candidate.get_attribute("title") or "").strip())
+            for candidate in candidates
+        ]
+        exact_matches = [
+            candidate
+            for candidate, title in titled_candidates
+            if title.casefold() == contact_key
+        ]
+        if exact_matches:
+            selected_contact = exact_matches[0]
+        else:
+            partial_matches = {
+                title.casefold(): candidate
+                for candidate, title in titled_candidates
+                if contact_key in title.casefold()
+            }
+            if len(partial_matches) != 1:
+                if len(partial_matches) > 1:
+                    print(
+                        f"⚠ WhatsApp contact '{contact}' is ambiguous. "
+                        "Use the full contact name or phone number."
+                    )
+                return None
+            selected_contact = next(iter(partial_matches.values()))
+
+        selected_contact.click()
+        time.sleep(0.5)
+        return self.driver.find_element(
+            By.CSS_SELECTOR, 'div[contenteditable="true"][data-tab="10"]'
+        )
+
+    def send_media(
+        self, contact: str, file_path: str | Path, caption: str = ""
+    ) -> bool:
+        """Send an image or audio file to a WhatsApp contact."""
+        path = Path(file_path)
+        if not self._logged_in or not contact.strip() or not path.is_file():
+            return False
+
+        try:
+            if self._open_chat(contact) is None:
+                return False
+
+            attach_buttons = self.driver.find_elements(
+                By.CSS_SELECTOR,
+                '[data-icon="plus"], [data-icon="attach-menu-plus"], '
+                '[data-icon="clip"]',
+            )
+            if attach_buttons:
+                attach_buttons[0].click()
+
+            file_inputs = self.driver.find_elements(
+                By.CSS_SELECTOR, 'input[type="file"]'
+            )
+            is_image = path.suffix.casefold() in IMAGE_SUFFIXES
+            preferred_inputs = [
+                element
+                for element in file_inputs
+                if _media_input_matches(
+                    element.get_attribute("accept") or "", path, is_image
+                )
+            ]
+            if not file_inputs:
+                raise RuntimeError("WhatsApp did not expose a file upload control.")
+            if not preferred_inputs:
+                raise RuntimeError(
+                    "WhatsApp did not expose a compatible media upload control."
+                )
+            upload_input = preferred_inputs[0]
+            upload_input.send_keys(str(path.resolve()))
+
+            if caption:
+                caption_box = WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located(
+                        (
+                            By.CSS_SELECTOR,
+                            'div[contenteditable="true"][data-tab="10"]',
+                        )
+                    )
+                )
+                caption_box.send_keys(caption)
+
+            send_button = WebDriverWait(self.driver, 20).until(
+                EC.element_to_be_clickable(
+                    (By.CSS_SELECTOR, '[data-icon="send"]')
+                )
+            )
+            send_button.click()
+            return True
+        except Exception as e:
+            print(f"⚠ WhatsApp media send error: {e}")
+            return False
 
     def get_summary(self) -> str:
         if not self._logged_in:
